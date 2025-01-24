@@ -1,0 +1,4 @@
+requests
+paddleocr
+openai
+tqdm
