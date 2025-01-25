@@ -2,3 +2,9 @@ requests
 paddleocr
 openai
 tqdm
+transformers>=4.37.0
+torch
+datasets
+peft
+tensorboard
+gradio

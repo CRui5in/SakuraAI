@@ -51,14 +51,14 @@ def generate_prompt_completion(text):
             model="deepseek-chat",
             messages=[
                 {"role": "system",
-                 "content": "你是一个专业的旅游助手，根据用户提供的信息生成详细的酒店推荐攻略，信息里面分别有标题、描述、图片文字，你需要通过这些信息生成语言自然并且合适的prompt和completion，其中图片文字中可能有些酒店无关信息，请你自行分辨有没有必要加入问答中，并严格确保返回如下JSON格式，"
+                 "content": "你是一个专业的旅游助手，根据用户提供的信息生成详细的旅游交通攻略，信息里面分别有标题、描述、图片文字，你需要通过这些信息生成语言自然并且合适的prompt和completion，其中图片文字中可能有些旅游交通无关信息，请你自行分辨有没有必要加入问答中，并严格确保返回如下JSON格式，"
                     "如：{"
-                    "\"prompt\": \"用户：我想要在大阪找一个干净舒适的酒店。\", "
-                    "\"completion\": \"助手：推荐新大阪微笑酒店，价格实惠，地理位置也很好\""
+                    "\"prompt\": \"用户：我想从关西国际机场到京都。\", "
+                    "\"completion\": \"助手：你可以在携程购买haruka快车，从关西机场直接到达JR京都站。\""
                     "}，"
                     "包含'prompt'和'completion'两个字段。"},
                 {"role": "user", "content": (
-                    f"根据以下获取的信息生成一段详细的酒店推荐攻略，紧扣酒店推荐主题，忽略无关内容，需要包含'prompt'和'completion'两个字段：{text}"
+                    f"根据以下获取的信息生成一段详细的旅游交通推荐攻略，紧扣旅游交通推荐主题，忽略无关内容，需要包含'prompt'和'completion'两个字段：{text}"
                 )}
             ],
             stream=False
@@ -118,13 +118,13 @@ def process_data(data, output_file):
 # 主函数
 def main():
     # 加载 JSON 数据
-    with open("data_hotel.json", "r", encoding="utf-8") as f:
+    with open("data_traffic.json", "r", encoding="utf-8") as f:
         data = json.load(f)
 
     # 处理数据并实时写入 JSON 文件
-    process_data(data, "processed_data_5.json")
+    process_data(data, "processed_data_7.json")
 
-    print("数据处理完成，结果已保存到 processed_data_5.json")
+    print("数据处理完成，结果已保存到 processed_data_7.json")
 
 if __name__ == "__main__":
     main()
