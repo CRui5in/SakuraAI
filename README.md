@@ -7,7 +7,7 @@ pip install -r requirements.txt
 ```
 ### 数据来源
 - 数据采集使用[MediaCrawler](https://github.com/NanmiCoder/MediaCrawler "MediaCrawler")采集于小红书 
-- 数据生成使用DeepSeek的API
+- 数据生成使用[DeepSeek](https://www.deepseek.com)的API
 - 若需要使用数据生成的OCR功能，请访问[PaddlePaddle官网](https://www.paddlepaddle.org.cn/install/quick?docurl=/documentation/docs/zh/install/pip/windows-pip.html)下载库
 
 ```bash

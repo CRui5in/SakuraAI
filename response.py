@@ -1,4 +1,3 @@
-import gradio as gr
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import PeftModel
@@ -22,8 +21,7 @@ base_model = AutoModelForCausalLM.from_pretrained(
 model = PeftModel.from_pretrained(base_model, lora_weights_path)
 model.eval()
 
-
-def predict(message, history):
+def chat_response(message, history):
     """
     处理用户输入并生成回复
     """
@@ -57,45 +55,40 @@ def predict(message, history):
 
     return response
 
+def agent_response(travel_agent, message, history):
+    """
+    处理用户输入并生成回复
+    """
+    try:
+        # 首先通过travel agent处理输入
+        response = travel_agent.process_input(message)
 
-# 创建Gradio界面
-with gr.Blocks() as demo:
-    gr.Markdown("# 对话模型演示")
+        # 如果需要，可以将agent的响应再通过原有的模型处理
+        full_prompt = ""
+        for hist in history:
+            full_prompt += f"<|im_start|>user\n{hist[0]}<|im_end|>\n<|im_start|>assistant\n{hist[1]}<|im_end|>\n"
+        full_prompt += f"<|im_start|>user\n{message}<|im_end|>\n<|im_start|>assistant\n{response}<|im_end|>\n"
 
-    chatbot = gr.Chatbot(
-        label="对话历史",
-        height=600
-    )
+        # 使用原有的模型生成最终响应
+        inputs = tokenizer(full_prompt, return_tensors="pt", add_special_tokens=False)
+        inputs = {k: v.to(model.device) for k, v in inputs.items()}
 
-    with gr.Row():
-        msg = gr.Textbox(
-            label="输入消息",
-            placeholder="请输入您的消息...",
-            lines=2
-        )
-        submit = gr.Button("发送")
+        with torch.no_grad():
+            outputs = model.generate(
+                **inputs,
+                max_new_tokens=512,
+                temperature=0.7,
+                top_p=0.9,
+                repetition_penalty=1.1,
+                do_sample=True,
+                pad_token_id=tokenizer.pad_token_id,
+                eos_token_id=tokenizer.encode("<|im_end|>", add_special_tokens=False)[0]
+            )
 
-    with gr.Row():
-        clear = gr.Button("清除对话")
+        response = tokenizer.decode(outputs[0][inputs['input_ids'].shape[1]:], skip_special_tokens=False)
+        response = response.split("<|im_end|>")[0].strip()
 
+        return response
 
-    def respond(message, chat_history):
-        if not message:
-            return "", chat_history
-
-        bot_message = predict(message, chat_history)
-        chat_history.append((message, bot_message))
-        return "", chat_history
-
-
-    def clear_history():
-        return None
-
-
-    msg.submit(respond, [msg, chatbot], [msg, chatbot])
-    submit.click(respond, [msg, chatbot], [msg, chatbot])
-    clear.click(clear_history, None, chatbot)
-
-# 启动界面
-if __name__ == "__main__":
-    demo.launch(share=False, server_port=6007)
+    except Exception as e:
+        return f"抱歉，处理您的请求时出现错误：{str(e)}"
