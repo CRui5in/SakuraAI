@@ -7,7 +7,7 @@ torch~=2.5.1
 datasets~=3.2.0
 peft~=0.14.0
 tensorboard
-gradio~=5.13.1
+gradio~=5.15.0
 langchain~=0.3.15
 googlemaps~=4.10.0
 langgraph~=0.2.67
