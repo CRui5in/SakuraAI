@@ -28,7 +28,7 @@ git lfs pull
 ```
 
 ### 启动Web
-![前端截图](./screenshot.png)
+![](screenshot.png)
 
 ```bash
 python3 web/app.py
