@@ -1,15 +1,21 @@
 import time
 import gradio as gr
 from typing import List, Tuple, Optional
+
+import uvicorn
+from fastapi import FastAPI
+from starlette.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+
 from agent import TravelAgent
 
 
 class ChatState:
     def __init__(self):
-        self.chats = [[]]  # 初始化时创建第一个空对话
-        self.current_chat_index = 0  # 设置当前对话索引为0
-        self.summaries = ["新对话"]  # 初始化第一个对话的摘要
-        self.dialogue_lengths = [0]  # 初始化第一个对话的长度计数
+        self.chats = [[]]
+        self.current_chat_index = 0
+        self.summaries = ["新对话"]
+        self.dialogue_lengths = [0]
 
 
 class WebTravelAgent(TravelAgent):
@@ -18,10 +24,18 @@ class WebTravelAgent(TravelAgent):
         self.chat_history: List[Tuple[Optional[str], Optional[str]]] = []
 
     def process_web_input(self, user_input: str, chat_state: ChatState) -> List[Tuple[str, str]]:
-        """处理网页输入并返回更新后的对话历史"""
         if chat_state.current_chat_index >= 0:
+            self.set_conversation_id(chat_state.current_chat_index)
             chat_state.chats[chat_state.current_chat_index].append((user_input, None))
             return chat_state.chats[chat_state.current_chat_index]
+        return []
+
+    def clear_history(self, chat_state: ChatState):
+        if chat_state.current_chat_index >= 0:
+            self.set_conversation_id(chat_state.current_chat_index)
+            chat_state.chats[chat_state.current_chat_index] = []
+            chat_state.dialogue_lengths[chat_state.current_chat_index] = 0
+            self.reset()
         return []
 
     def get_chat_summary(self, chat_history: List[Tuple[str, str]]) -> str:
@@ -30,11 +44,14 @@ class WebTravelAgent(TravelAgent):
             return "新对话"
 
         first_msg = next((msg for msg, _ in chat_history if msg), "新对话")
-        prompt = f"请用不超过8个字简要总结用户的请求内容。用户输入：{first_msg}"
+        prompt = f"""请用不超过8个字简要总结用户的请求内容，并且只需要输出总结内容，最后不需要加句号。
+                    示例：
+                    输入：我想去北京旅游。
+                    输出：北京旅游规划
+                    用户输入：{first_msg}"""
 
         try:
             response = self.model_manager.generate_qwen_response(prompt)
-            print(response)
             return response.strip()[:10]
         except:
             return first_msg[:10]
@@ -46,21 +63,18 @@ class WebTravelAgent(TravelAgent):
             return chat_state.chats[chat_state.current_chat_index]
         return []
 
-    def clear_history(self, chat_state: ChatState):
-        """清除当前对话历史"""
-        if chat_state.current_chat_index >= 0:
-            chat_state.chats[chat_state.current_chat_index] = []
-            chat_state.dialogue_lengths[chat_state.current_chat_index] = 0
-        self.reset()
-        return []
-
+def create_iframe_html():
+    return """
+    <iframe src="/app.html" style="width:100%; height:100vh; border:none;"></iframe>
+    """
 
 def build_ui():
     with gr.Blocks(theme=gr.themes.Soft(), title="智能旅游助手") as demo:
+        gr.HTML(create_iframe_html())
         global chat_btns
         chat_btns = []
 
-        with gr.Sidebar():
+        with gr.Sidebar(open=False):
             with gr.Row():
                 with gr.Column(scale=10):
                     gr.Markdown("# Sakura🌸AI")
@@ -85,9 +99,20 @@ def build_ui():
         chatbot = gr.Chatbot(
             [],
             elem_id="chatbot",
-            height=650,
-            show_label=False
+            height="60vh",
+            show_label=False,
+            group_consecutive_messages=False,
+            show_copy_button=True,
+            avatar_images=(
+                "static/user.png",
+                "static/bot.png"
+            )
         )
+        with gr.Row():
+            use_finetuned = gr.Checkbox(
+                label="模型强化",
+                value=True,
+            )
 
         with gr.Row():
             with gr.Column(scale=20):
@@ -100,6 +125,18 @@ def build_ui():
                 submit = gr.Button("🚀", variant="primary")
             with gr.Column(scale=1, min_width=50):
                 clear = gr.Button("🗑️", variant="secondary")
+
+        with gr.Row():
+            examples = [
+                ["我想去重庆玩3天，要去解放碑和洪崖洞"],
+                ["我想去北京旅游"],
+                ["我想去旅游七天"],
+            ]
+            gr.Examples(
+                examples=examples,
+                inputs=msg,
+                examples_per_page=3
+            )
 
         def create_new_chat():
             """创建新对话"""
@@ -129,11 +166,12 @@ def build_ui():
                 return chat_state.chats[index]
             return []
 
-        def respond(user_input: str, chat_history: List[Tuple[str, str]]):
+        def respond(user_input: str, use_finetuned: bool, chat_history: List[Tuple[str, str]]):
             if not user_input or chat_state.current_chat_index < 0:
                 return "", chat_history
 
             try:
+                web_agent.model_manager.use_finetuned = use_finetuned
                 chat_history = web_agent.process_web_input(user_input, chat_state)
                 yield "", chat_history, *[gr.update()] * 6
 
@@ -176,16 +214,18 @@ def build_ui():
 
         msg.submit(
             respond,
-            [msg, chatbot],
+            [msg, use_finetuned, chatbot],
             [msg, chatbot] + chat_btns,
             queue=True
         )
+
         submit.click(
             respond,
-            [msg, chatbot],
+            [msg, use_finetuned, chatbot],
             [msg, chatbot] + chat_btns,
             queue=True
         )
+
         clear.click(lambda: web_agent.clear_history(chat_state), None, chatbot)
 
         new_chat_btn.click(
@@ -201,6 +241,21 @@ def build_ui():
                 outputs=[chatbot]
             )
 
+        demo.load(
+            fn=None,
+            inputs=None,
+            outputs=None,
+            js="""
+                function() {
+                    const isDarkMode = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+                    if (isDarkMode && document.body.classList.contains('dark')) {
+                        document.body.classList.toggle('dark');
+                    }
+                    window.scrollTo(0, 0);
+                }
+            """
+        )
+
     return demo
 
 
@@ -208,4 +263,15 @@ if __name__ == "__main__":
     web_agent = WebTravelAgent()
     chat_state = ChatState()
     demo = build_ui()
-    demo.launch(server_port=7860, share=False, debug=True)
+
+    app = FastAPI()
+
+    app.mount("/static", StaticFiles(directory="static"), name="static")
+
+    @app.get("/app.html")
+    async def serve_scroll_demo():
+        return FileResponse("app.html")
+
+    app = gr.mount_gradio_app(app, demo, path="/", show_api=False, favicon_path="favicon.ico")
+
+    uvicorn.run(app, host="127.0.0.1", port=7879, ssl_keyfile=None, ssl_certfile=None)

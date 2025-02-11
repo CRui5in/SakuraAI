@@ -1,17 +1,17 @@
 import operator
 import traceback
-from typing import List, Dict, Optional, Any, Annotated
+from typing import List, Dict, Optional, Any
 import torch
 from langgraph.constants import START
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import PeftModel
 from langgraph.graph import StateGraph, END
-from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+from langchain_core.messages import HumanMessage, AIMessage
 from typing_extensions import TypedDict
 import json
 import googlemaps
 
-from tool import extract_json_block, merge_dicts
+from tools.tool import extract_json_block, merge_dicts
 
 REDUCER_METADATA = {"reducer": operator.add}
 
@@ -52,77 +52,81 @@ class ModelManager:
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
-            # 初始化时加载所有模型
-            cls._instance.qwen_tokenizer = AutoTokenizer.from_pretrained("./Qwen2.5-7B-Instruct")
+            cls._instance.use_finetuned = True
+            cls._instance.qwen_tokenizer = AutoTokenizer.from_pretrained("../Qwen2.5-7B-Instruct")
             cls._instance.qwen_tokenizer.pad_token = cls._instance.qwen_tokenizer.eos_token
 
-            base_model = AutoModelForCausalLM.from_pretrained(
-                "./Qwen2.5-7B-Instruct",
+            cls._instance.base_model = AutoModelForCausalLM.from_pretrained(
+                "../Qwen2.5-7B-Instruct",
                 torch_dtype=torch.bfloat16,
                 device_map="auto"
             )
-            cls._instance.qwen_model = PeftModel.from_pretrained(base_model, "./lora-weights")
-            cls._instance.qwen_model.eval()
 
-            cls._instance.deepseek_tokenizer = AutoTokenizer.from_pretrained("./DeepSeek-R1-Distill-Qwen-7B")
-            cls._instance.deepseek_model = AutoModelForCausalLM.from_pretrained(
-                "./DeepSeek-R1-Distill-Qwen-7B",
-                torch_dtype=torch.bfloat16,
-                device_map="auto"
-            )
+            cls._instance.finetuned_model = PeftModel.from_pretrained(cls._instance.base_model, "../lora-weights")
+            cls._instance.finetuned_model.eval()
+
+            # cls._instance.deepseek_tokenizer = AutoTokenizer.from_pretrained("../DeepSeek-R1-Distill-Qwen-7B")
+            # cls._instance.deepseek_model = AutoModelForCausalLM.from_pretrained(
+            #     "../DeepSeek-R1-Distill-Qwen-7B",
+            #     torch_dtype=torch.bfloat16,
+            #     device_map="auto"
+            # )
+
         return cls._instance
 
     def generate_qwen_response(self, message: str) -> str:
+        model = self.finetuned_model if self.use_finetuned else self.base_model
+
         full_prompt = f"<|im_start|>user\n{message}<|im_end|>\n<|im_start|>assistant\n"
         inputs = self.qwen_tokenizer(full_prompt, return_tensors="pt", add_special_tokens=False)
-        inputs = {k: v.to(self.qwen_model.device) for k, v in inputs.items()}
+        inputs = {k: v.to(model.device) for k, v in inputs.items()}
 
         with torch.no_grad():
-            outputs = self.qwen_model.generate(
+            outputs = model.generate(
                 **inputs,
-                max_new_tokens=100,
+                max_new_tokens=4096,
                 temperature=0.7
             )
 
         response = self.qwen_tokenizer.decode(outputs[0][inputs['input_ids'].shape[1]:], skip_special_tokens=True)
         return response.split("<|im_end|>")[0].strip()
 
-    def generate_deepseek_response(self, message: str, history: List = None) -> str:
-        if history is None:
-            history = []
-
-        deepseek_tokenizer = AutoTokenizer.from_pretrained("./DeepSeek-R1-Distill-Qwen-7B")
-
-        deepseek_model = AutoModelForCausalLM.from_pretrained(
-            "./DeepSeek-R1-Distill-Qwen-7B",
-            torch_dtype=torch.bfloat16,
-            device_map="auto"
-        )
-
-        # 构造对话历史
-        full_prompt = ""
-        for hist in history:
-            full_prompt += f"<|im_start|>user\n{hist[0]}<|im_end|>\n<|im_start|>assistant\n{hist[1]}<|im_end|>\n"
-        full_prompt += f"<|im_start|>user\n{message}<|im_end|>\n<|im_start|>assistant\n"
-
-        inputs = deepseek_tokenizer(full_prompt, return_tensors="pt", add_special_tokens=False)
-        inputs = {k: v.to(deepseek_model.device) for k, v in inputs.items()}
-
-        with torch.no_grad():
-            outputs = deepseek_model.generate(
-                **inputs,
-                max_new_tokens=1024,
-                temperature=0.7,
-                top_p=0.9,
-                repetition_penalty=1.1,
-                do_sample=True,
-                pad_token_id=deepseek_tokenizer.pad_token_id,
-                eos_token_id=deepseek_tokenizer.encode("<|im_end|>", add_special_tokens=False)[0]
-            )
-
-        response = deepseek_tokenizer.decode(outputs[0][inputs['input_ids'].shape[1]:], skip_special_tokens=False)
-        response = response.split("<|im_end|>")[0].strip()
-        return response
+    # def generate_deepseek_response(self, message: str, history: List = None) -> str:
+    #     if history is None:
+    #         history = []
+    #
+    #     deepseek_tokenizer = AutoTokenizer.from_pretrained("./DeepSeek-R1-Distill-Qwen-7B")
+    #
+    #     deepseek_model = AutoModelForCausalLM.from_pretrained(
+    #         "./DeepSeek-R1-Distill-Qwen-7B",
+    #         torch_dtype=torch.bfloat16,
+    #         device_map="auto"
+    #     )
+    #
+    #     # 构造对话历史
+    #     full_prompt = ""
+    #     for hist in history:
+    #         full_prompt += f"<|im_start|>user\n{hist[0]}<|im_end|>\n<|im_start|>assistant\n{hist[1]}<|im_end|>\n"
+    #     full_prompt += f"<|im_start|>user\n{message}<|im_end|>\n<|im_start|>assistant\n"
+    #
+    #     inputs = deepseek_tokenizer(full_prompt, return_tensors="pt", add_special_tokens=False)
+    #     inputs = {k: v.to(deepseek_model.device) for k, v in inputs.items()}
+    #
+    #     with torch.no_grad():
+    #         outputs = deepseek_model.generate(
+    #             **inputs,
+    #             max_new_tokens=4096,
+    #             temperature=0.7,
+    #             top_p=0.9,
+    #             repetition_penalty=1.1,
+    #             do_sample=True,
+    #             pad_token_id=deepseek_tokenizer.pad_token_id,
+    #             eos_token_id=deepseek_tokenizer.encode("<|im_end|>", add_special_tokens=False)[0]
+    #         )
+    #
+    #     response = deepseek_tokenizer.decode(outputs[0][inputs['input_ids'].shape[1]:], skip_special_tokens=False)
+    #     response = response.split("<|im_end|>")[0].strip()
+    #     return response
 
 class TravelKnowledgeBase:
     """空的知识库类，用于占位"""
@@ -171,7 +175,6 @@ class TravelAgentNodes:
         print("=== Starting requirement analyze ===")
         user_message = next((msg.content for msg in reversed(state['messages']) if isinstance(msg, HumanMessage)),
                             None)
-        print("Raw analyzer input:", user_message)
 
         prompt = f"""
         注意事项：
@@ -199,13 +202,14 @@ class TravelAgentNodes:
            禁止填充推测值。
            禁止联想相关场景。
            禁止输出除JSON数据以外语句。
+           禁止在输出的JSON数据中加入//注释。
 
         你是一个从用户输入中提取信息的助手，需要从用户输入的信息整合成满足注意事项的JSON格式数据进行下一步处理。
 
         用户输入：{user_message}
         """
 
-        response = self.model_manager.generate_deepseek_response(prompt)
+        response = self.model_manager.generate_qwen_response(prompt)
         print("Analyzer response:", response)
         response = extract_json_block(response)
 
@@ -298,14 +302,14 @@ class TravelAgentNodes:
         # attractions = (self.knowledge_base.get_attractions(requirements["destination"])
         #                if self.use_knowledge_base else "未指定景点")
 
-        prompt = f"""请根据以下信息生成详细的旅游计划，对每一天的行程都要做详细的安排，越详细越好，同时输出表格形式，可以加入emoji：
+        prompt = f"""请根据以下信息生成详细的旅游计划，对每一天的行程都要做详细的安排，越详细越好，按照早中晚安排，
+        也需要考虑用户的体力，松弛有度，行程路线合理，行程最后输出用markdown格式，可以加入emoji：
+        用户输入：
         目的地：{requirements.get('destination')}
         天数：{requirements.get('duration')}
         推荐景点：{requirements.get('attractions')}
         住宿偏好：{requirements.get('hotel_preference')}
-        交通偏好：{requirements.get('transport_preference')}
-
-        请生成每天的具体行程安排。"""
+        交通偏好：{requirements.get('transport_preference')}"""
 
         generated_plan = self.model_manager.generate_qwen_response(prompt)
         feedback_prompt = """\n\n您对这份行程安排是否满意呢？如果需要调整，请告诉我具体想调整的地方，我会重新为您规划。如果满意，请回复"满意"❤️。"""
@@ -317,12 +321,12 @@ class TravelAgentNodes:
             "current_step": "wait_feedback",
             "travel_requirements": requirements,
             "generated_plan": generated_plan,
-            "status": "waiting_input"
+            "status": "waiting_destination_input"
         }
 
     def wait_feedback_handler(self, state: Dict) -> Dict:
         print("====== Processing feedback ======")
-        if state["status"] == "waiting_input":
+        if state["status"] == "waiting_destination_input":
             return {
                 **state,
                 "current_step": END
@@ -434,6 +438,7 @@ class TravelAgentNodes:
             "status": "after_general_query"
         }
 
+
 class TravelAgent:
     def __init__(self, knowledge_base: Optional[TravelKnowledgeBase] = None,
                  gmaps_api_key: Optional[str] = None):
@@ -442,46 +447,48 @@ class TravelAgent:
             key=gmaps_api_key)
         self.model_manager = ModelManager()
         self.workflow = create_travel_agent_workflow(self.knowledge_base, self.gmaps_client)
-        self.current_state = None
         self.conversation_states = {}
+        self.dialogue_histories = {}
+        self.current_conversation_id = 0
 
     def reset(self):
-        self.current_state = None
+        if self.current_conversation_id in self.conversation_states:
+            del self.conversation_states[self.current_conversation_id]
+        if self.current_conversation_id in self.dialogue_histories:
+            del self.dialogue_histories[self.current_conversation_id]
+
+    def set_conversation_id(self, conversation_id: int):
+        self.current_conversation_id = conversation_id
+        if conversation_id not in self.dialogue_histories:
+            self.dialogue_histories[conversation_id] = []
+        if conversation_id not in self.conversation_states:
+            self.conversation_states[conversation_id] = None
 
     def process_input(self, user_input: str) -> List[tuple]:
-        """
-        处理用户输入并返回对话历史
-        Args:
-            user_input: 用户输入的文本
-
-        Returns:
-            List[tuple]: 包含对话历史的列表，每个元素是(role, content)的元组
-        """
         try:
-            if self.current_state is not None and self.current_state["status"] == "waiting_destination_input":
-                new_messages = self.current_state["messages"] + [HumanMessage(content=user_input)]
-                self.current_state = {
+            if self.current_conversation_id not in self.dialogue_histories:
+                self.dialogue_histories[self.current_conversation_id] = []
+
+            current_history = self.dialogue_histories[self.current_conversation_id]
+
+            if self.conversation_states.get(self.current_conversation_id) is not None:
+                new_messages = self.conversation_states[self.current_conversation_id]["messages"] + [
+                    HumanMessage(content=user_input)]
+                self.conversation_states[self.current_conversation_id] = {
                     "messages": new_messages,
-                    "current_step": self.current_state["current_step"],
-                    "travel_requirements": self.current_state["travel_requirements"].copy(),
-                    "generated_plan": self.current_state["generated_plan"],
-                    "status": "waiting-destination-active"
-                }
-            elif self.current_state is not None and self.current_state["status"] == "after_general_query":
-                new_messages = self.current_state["messages"] + [HumanMessage(content=user_input)]
-                self.current_state = {
-                    "messages": new_messages,
-                    "current_step": self.current_state["current_step"],
-                    "travel_requirements": self.current_state["travel_requirements"].copy(),
-                    "generated_plan": self.current_state["generated_plan"],
+                    "current_step": self.conversation_states[self.current_conversation_id]["current_step"],
+                    "travel_requirements": self.conversation_states[self.current_conversation_id][
+                        "travel_requirements"].copy(),
+                    "generated_plan": self.conversation_states[self.current_conversation_id]["generated_plan"],
                     "status": "active"
                 }
             else:
-                self.current_state = AgentState.create_initial(user_input)
+                self.conversation_states[self.current_conversation_id] = AgentState.create_initial(user_input)
 
-            final_state = self.workflow.invoke(self.current_state)
-            self.current_state = final_state
+            final_state = self.workflow.invoke(self.conversation_states[self.current_conversation_id])
+            self.conversation_states[self.current_conversation_id] = final_state
 
+            # 只处理新消息
             dialogue_history = []
             for message in final_state["messages"]:
                 if isinstance(message, HumanMessage):
@@ -489,11 +496,16 @@ class TravelAgent:
                 elif isinstance(message, AIMessage):
                     dialogue_history.append(("assistant", message.content))
 
+            # 更新当前对话的历史记录
+            self.dialogue_histories[self.current_conversation_id] = dialogue_history
+
             return dialogue_history
 
         except Exception as e:
             print(f"Error in process_input: {traceback.format_exc()}")
-            return [("user", user_input), ("assistant", f"处理请求时发生错误: {str(e)}")]
+            error_history = [("user", user_input), ("assistant", f"处理请求时发生错误: {str(e)}")]
+            self.dialogue_histories[self.current_conversation_id] = error_history
+            return error_history
 
 
 def create_travel_agent_workflow(knowledge_base: TravelKnowledgeBase,
@@ -501,7 +513,6 @@ def create_travel_agent_workflow(knowledge_base: TravelKnowledgeBase,
     workflow = StateGraph(AgentState)
     nodes = TravelAgentNodes(knowledge_base, gmaps_client)
 
-    # 添加所有节点
     workflow.add_node("task_classifier", nodes.task_classifier)
     workflow.add_node("requirement_analysis", nodes.requirement_analyzer)
     workflow.add_node("ask_destination", nodes.destination_asker)
@@ -512,10 +523,8 @@ def create_travel_agent_workflow(knowledge_base: TravelKnowledgeBase,
     workflow.add_node("error_handling", nodes.error_handler)
     workflow.add_node("general_query", nodes.general_query_handler)
 
-    # 设置起始边
     workflow.add_edge(START, "task_classifier")
 
-    # 任务分类器的边
     workflow.add_conditional_edges(
         "task_classifier",
         lambda x: x["current_step"],
@@ -525,7 +534,6 @@ def create_travel_agent_workflow(knowledge_base: TravelKnowledgeBase,
         }
     )
 
-    # 需求分析的边
     workflow.add_conditional_edges(
         "requirement_analysis",
         lambda x: x["current_step"],
@@ -537,15 +545,13 @@ def create_travel_agent_workflow(knowledge_base: TravelKnowledgeBase,
         }
     )
 
-    # 询问目的地的边
     workflow.add_edge("ask_destination", "wait_destination")
 
-    # 等待目的地输入的边
     workflow.add_conditional_edges(
         "wait_destination",
         lambda x: x["status"],
         {
-            "waiting_input": END,
+            "waiting_destination_input": END,
             "active": "requirement_analysis"
         }
     )
@@ -577,26 +583,21 @@ def create_travel_agent_workflow(knowledge_base: TravelKnowledgeBase,
     return workflow.compile()
 
 def main():
-    # 创建旅行代理实例
     basic_agent = TravelAgent()
 
     print("欢迎使用旅行助手！请输入您的需求，输入'退出'结束对话。")
 
     while True:
-        # 获取用户输入
         user_input = input("\n=========== HUMAN MESSAGE ===========\n")
 
-        # 检查是否退出
         if user_input.lower() in ['退出', 'quit', 'exit']:
             print("\n============ AI MESSAGE ============")
             print("感谢使用旅行助手，再见！")
             break
 
-        # 处理用户输入
         try:
             dialogue_history = basic_agent.process_input(user_input)
 
-            # 打印对话历史
             for role, content in dialogue_history:
                 if role == "user":
                     print(f"\n=========== HUMAN MESSAGE ===========")
